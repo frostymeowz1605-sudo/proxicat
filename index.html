@@ -1336,14 +1336,15 @@ function updateAiTimer(){
     if(document.hidden) return;
     for(const [chId, cfg] of Object.entries(aiBots)){
       if(!cfg.active) continue;
-      const data = rateLimited ? {messages:[], decorations:[], typing:{}} : await loadChannel(chId);
-      const merged = mergeWithUnconfirmed(chId, data.messages);
+      const before = rateLimited ? {messages:[], decorations:[], typing:{}} : await loadChannel(chId);
+      const merged = mergeWithUnconfirmed(chId, before.messages);
       await maybeRunAi(chId, merged);
       if(chId===activeChannel){
-        const merged2 = mergeWithUnconfirmed(chId, data.messages);
-        const mergedDeco = mergeDecorations(chId, data.decorations);
-        const snap = JSON.stringify([merged2.length, merged2.map(m=>m.id+(m._failed?'f':'')), mergedDeco, data.typing]);
-        if(snap!==lastSnapshot){ lastSnapshot=snap; renderMessages(merged2); renderDecorations(mergedDeco); renderTyping(data.typing); }
+        const after = rateLimited ? {messages:[], decorations:[], typing:{}} : await loadChannel(chId); // odśwież - bot mógł właśnie dopisać odpowiedź
+        const merged2 = mergeWithUnconfirmed(chId, after.messages);
+        const mergedDeco = mergeDecorations(chId, after.decorations);
+        const snap = JSON.stringify([merged2.length, merged2.map(m=>m.id+(m._failed?'f':'')), mergedDeco, after.typing]);
+        if(snap!==lastSnapshot){ lastSnapshot=snap; renderMessages(merged2); renderDecorations(mergedDeco); renderTyping(after.typing); }
       }
     }
   }, 7000);
@@ -1367,6 +1368,7 @@ async function callModel(systemPrompt, userContent){
       body: JSON.stringify({
         model:'qwen/qwen3.6-27b',
         max_tokens:300,
+        reasoning_format:'hidden',
         messages:[
           {role:'system', content:systemPrompt},
           {role:'user', content:userContent}
@@ -1384,7 +1386,16 @@ async function callModel(systemPrompt, userContent){
   }
   const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
   if(!text) throw new Error('Groq zwrócił pustą odpowiedź.');
-  return text.trim();
+  return stripThinking(text);
+}
+
+// zabezpieczenie: usuwa ślady "myślenia" modelu, gdyby reasoning_format=hidden nie zadziałał dla danego modelu
+function stripThinking(text){
+  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  // gdyby brakowało zamykającego tagu (ucięta odpowiedź) - odetnij wszystko od <think> do końca
+  cleaned = cleaned.replace(/<think>[\s\S]*$/gi, '');
+  cleaned = cleaned.trim();
+  return cleaned || text.trim(); // gdyby po czyszczeniu zostało pusto, lepiej pokazać oryginał niż nic
 }
 
 let aiVoiceMode = {}; // channelId -> bool, czy bot jest "w rozmowie głosowej" (odpowiedzi czytane na głos)
